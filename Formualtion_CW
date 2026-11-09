@@ -1,1 +1,35 @@
-print("Hello Miriam")
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+from scipy.optimize import curve_fit      # nonlinear fitting
+from scipy.integrate import solve_ivp     # time integration (method of lines + moments)
+from scipy.stats import linregress        # quick linear fits on log data + R²
+
+
+df = pd.read_csv("SoF-Coursework-26-27-KineticData.csv")
+df.columns = ["S", "G", "Nuc_Rate"]
+
+# Reference simulation parameters (Table 1)
+
+# Initial/Operating conditions
+c0 = 8.0                # initial concentration [g/kg]
+T = 15.0                # temperature [°C]
+
+# Seed parameters (normal distribution)
+L_mean = 100.0          # average seed length [µm]
+sigma1 = 10.0           # standard deviation of seed length [µm]
+m0 = 1.0                # seed mass [g]
+
+# Particle properties
+rho_c = 1.11e-12        # crystal density [g/µm^3]
+kv = np.pi / 4          # volume shape factor, cylinder [-]
+
+# Numerical parameters (spatial discretisation)
+L_max = 500.0           # maximum length [µm]
+dL = 1.0                # bin length [µm]
+t_max = 86400.0         # simulation time [s] (= 24 h)
+
+# Solubility: c* = a * exp(b*T)
+a = 3.37                # [g/kg]
+b = 0.0359              # [1/°C]
+
