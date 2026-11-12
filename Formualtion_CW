@@ -74,3 +74,10 @@ k4 = k1 * (S_switch - 1)**k2 - k3 * S_switch
 print(f"k1 = {k1:.2f}, k2 = {k2:.2f}, k3 = {k3:.2f}, k4 = {k4:.2f}, S_switch = {S_switch:.3f}")
 print(f"for 1 < S < {S_switch:.3f} use: {k1:.2f}*(S-1)^{k2:.2f}, for S > {S_switch:.3f} use: {k3:.2f}*S + {k4:.2f}")
 
+
+#R^2 for Growth function
+G_pred = growth_function(S, *fit_var_G)          # predicted G at each S
+SS_res = np.sum((G - G_pred)**2)                 # unexplained error
+SS_tot = np.sum((G - np.mean(G))**2)             # total variation in data
+R2 = 1 - SS_res / SS_tot
+print(f"R² = {R2:.5f}")
