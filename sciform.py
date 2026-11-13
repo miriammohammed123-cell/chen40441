@@ -22,4 +22,20 @@ here = Path(__file__).parent
 df = pd.read_csv(here / "SoF-Coursework-26-27-KineticData.csv")
 df.columns = ["S", "G", "Nuc_rate"]
 
+x = []   # 1 / ln(S)^2
+y = []   # ln(B)
 
+for i in range(len(df)):
+    if df["Nuc_rate"][i]>0 and df["S"][i]>1:
+        x.append(1/(np.log(df["S"][i])**2))
+        y.append(np.log(df["Nuc_rate"][i]))
+
+x=np.array(x)
+y=np.array(y)
+slope,intercept=np.polyfit(x,y,1)
+r=np.corrcoef(x,y)[0,1]
+A=np.exp(intercept)
+B=-slope
+print(f"A = {A:.4e}")
+print(f"B = {B:.4f}")
+print(f"r = {r:.6f}   r^2 = {r**2:.6f}")
