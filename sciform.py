@@ -2,9 +2,12 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
+import warnings
+from scipy.optimize import curve_fit
+from scipy.integrate import solve_ivp
 
-c0 = 8.0              # initial concentration [g/kg]
-T = 15.0              # temperature [°C]
+c0 = 20         # initial concentration [g/kg]
+T = 15           # temperature [°C]
 
 L_mean = 100.0        # seed average length [μm]
 sigma_L = 10.0        # seed length std dev [μm]
@@ -21,6 +24,12 @@ t_max = 86400         # simulation time [s]
 # Solubility: c* = a * exp(b*T)
 a = 3.37                # [g/kg]
 b = 0.0359              # [1/°C]
+
+
+# gets looks for the file in the folder and renames the headings
+here = Path(__file__).parent
+df = pd.read_csv(here / "SoF-Coursework-26-27-KineticData.csv")
+df.columns = ["S", "G", "Nuc_rate"]
 
 
 #Fitting function of G to S
@@ -70,11 +79,6 @@ SS_tot = np.sum((G - np.mean(G))**2)             # total variation in data
 R2 = 1 - SS_res / SS_tot
 print(f"R² = {R2:.5f}")
 
-# gets looks for the file in the folder and renames the headings
-here = Path(__file__).parent
-df = pd.read_csv(here / "SoF-Coursework-26-27-KineticData.csv")
-df.columns = ["S", "G", "Nuc_rate"]
-
 x = []   # 1 / ln(S)^2
 y = []   # ln(B)
 
@@ -113,3 +117,118 @@ plt.xlim(40, 160)
 plt.savefig(here/ "seeds.png", dpi=200)
 print("saved seeds.png")
 
+# Solubility and supersaturation
+def solubility(T):
+    return a * np.exp(b * T)
+
+def supersaturation(c, T):
+    return c / solubility(T)
+
+c_star = solubility(T)              # solubility at 15 °C [g/kg]
+S0 = supersaturation(c0, T)         # initial supersaturation [-]
+
+print(f"c*  = {c_star:.3f} g/kg")
+print(f"S0  = {S0:.3f}")
+print(f"max solute that can crystallise = {c0 - c_star:.3f} g/kg")
+
+# ---------- Setup ----------
+m_solvent = 1.0                 # solvent mass [kg]  (assumed basis, not in Table 1)
+c_star = solubility(T)          # c* at 15 °C [g/kg]
+N_bin = len(L)                  # number of size bins (500)
+
+
+# ---------- Kinetics: links the two phases ----------
+def kinetics(c):
+    """Growth rate G [μm/s] and nucleation rate J [crystals/s] from concentration."""
+    S = c / c_star
+    if S > 1:
+        G = float(growth_function(S, *fit_var_G))
+        J = A * np.exp(-B / np.log(S)**2) * m_solvent
+    else:
+        G = 0.0
+        J = 0.0
+    return G, J
+
+
+# ---------- Solid phase: population balance ----------
+def solid_phase(f, G, J):
+    """df/dt for every size bin."""
+    dfdt = np.zeros(N_bin)
+    for i in range(N_bin):
+        if i == 0:
+            flux_in = J                 # boundary condition at L = 0
+        else:
+            flux_in = G * f[i-1]        # growth in from the bin below
+        flux_out = G * f[i]             # growth out to the bin above
+        dfdt[i] = (flux_in - flux_out) / dL
+    return dfdt
+
+
+# ---------- Liquid phase: solute mass balance ----------
+def liquid_phase(dfdt):
+    """dc/dt: solute leaves the liquid at the rate the crystals gain mass."""
+    mass_rate = 0.0                     # [g/s]
+    for i in range(N_bin):
+        mass_rate = mass_rate + rho_c * kv * L[i]**3 * dfdt[i] * dL
+    dcdt = -mass_rate / m_solvent
+    return dcdt
+
+
+# ---------- Combine both phases for the solver ----------
+def rhs(t, y):
+    f = y[:N_bin]                       # solid phase state
+    c = y[N_bin]                        # liquid phase state
+
+    G, J = kinetics(c)
+    dfdt = solid_phase(f, G, J)
+    dcdt = liquid_phase(dfdt)
+
+    dydt = np.zeros(N_bin + 1)
+    for i in range(N_bin):
+        dydt[i] = dfdt[i]
+    dydt[N_bin] = dcdt
+    return dydt
+
+
+# ---------- Initial conditions ----------
+y0 = np.zeros(N_bin + 1)
+for i in range(N_bin):
+    y0[i] = n0[i]                       # seeds
+y0[N_bin] = c0                          # initial concentration
+
+
+# ---------- Solve ----------
+t_out = np.linspace(0, t_max, 500)
+sol = solve_ivp(rhs, [0, t_max], y0, method="LSODA",
+                t_eval=t_out, rtol=1e-6, atol=1e-8)
+print("solver finished:", sol.success)
+
+f_end = sol.y[:N_bin, -1]               # final size distribution
+c_t = sol.y[N_bin]                      # concentration over time
+
+print(sol.y[:N_bin, -1])                                   # all 500 final PSD values [crystals/μm]
+print(f"final concentration = {sol.y[N_bin, -1]:.4f} g/kg")
+
+# ---------- Checks ----------
+m_end = rho_c * kv * np.sum(f_end * L**3 * dL)
+c_check = c0 - (m_end - m_seed) / m_solvent
+print(f"final c = {c_t[-1]:.4f} g/kg, from crystal mass = {c_check:.4f} g/kg")
+print(f"final S = {c_t[-1] / c_star:.4f}, crystal mass = {m_end:.4f} g")
+print(f"f in the last bin at the end = {f_end[-1]:.3e}")
+
+# ---------- Plot the size distribution at the final time ----------
+f_end = sol.y[:N_bin, -1]               # all bins, last time point
+
+plt.figure(figsize=(7, 5))
+plt.plot(L, f_end, label=f"t = {t_out[-1]:.0f} s")
+plt.xlabel("Crystal length, L [μm]")
+plt.ylabel("f(t, L) [crystals/μm]")
+plt.xlim(0, 250)
+plt.legend()
+plt.tight_layout()
+plt.savefig(here / "psd_final.png", dpi=200)
+print("saved psd_final.png")
+
+for i in range(N_bin):
+    print(f"L = {L[i]:6.1f} μm    f = {sol.y[i, -1]:.4e} crystals/μm")
+print(f"final concentration = {sol.y[N_bin, -1]:.4f} g/kg")
