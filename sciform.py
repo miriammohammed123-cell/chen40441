@@ -6,7 +6,7 @@ import warnings
 from scipy.optimize import curve_fit
 from scipy.integrate import solve_ivp
 
-c0 = 20         # initial concentration [g/kg]
+c0 = 8         # initial concentration [g/kg]
 T = 15           # temperature [°C]
 
 L_mean = 100.0        # seed average length [μm]
@@ -198,7 +198,7 @@ y0[N_bin] = c0                          # initial concentration
 
 
 # ---------- Solve ----------
-t_out = np.linspace(0, t_max, 500)
+t_out = np.concatenate(([0.0], np.logspace(-1, np.log10(t_max), 499)))
 sol = solve_ivp(rhs, [0, t_max], y0, method="LSODA",
                 t_eval=t_out, rtol=1e-6, atol=1e-8)
 print("solver finished:", sol.success)
@@ -232,3 +232,64 @@ print("saved psd_final.png")
 for i in range(N_bin):
     print(f"L = {L[i]:6.1f} μm    f = {sol.y[i, -1]:.4e} crystals/μm")
 print(f"final concentration = {sol.y[N_bin, -1]:.4f} g/kg")
+
+# ---------- Method of moments ----------
+def moments_rhs(t, z):
+    """z = [m0, m1, m2, m3, c]. Returns dz/dt."""
+    c = z[4]
+    G, J = kinetics(c)
+
+    dzdt = np.zeros(5)
+    dzdt[0] = J                                   # dm0/dt = J
+    for j in range(1, 4):
+        dzdt[j] = j * G * z[j-1]                  # dmj/dt = j G m(j-1)
+    dzdt[4] = -rho_c * kv * dzdt[3] / m_solvent   # dc/dt = -rho_c kv dm3/dt
+    return dzdt
+
+# initial moments from the seed distribution, then c0
+z0 = np.zeros(5)
+for j in range(4):
+    for i in range(N_bin):
+        z0[j] = z0[j] + L[i]**j * n0[i] * dL
+z0[4] = c0
+
+sol_mom = solve_ivp(moments_rhs, [0, t_max], z0, method="LSODA",
+                    t_eval=t_out, rtol=1e-8, atol=1e-10)
+print("moments solver finished:", sol_mom.success)
+
+# moments of the PBE solution at every output time
+pbe_mom = np.zeros((4, len(t_out)))
+for k in range(len(t_out)):
+    for j in range(4):
+        for i in range(N_bin):
+            pbe_mom[j, k] = pbe_mom[j, k] + L[i]**j * sol.y[i, k] * dL
+
+# compare the two methods at the final time
+print("final time comparison (PBE vs method of moments)")
+for j in range(4):
+    diff = 100 * (pbe_mom[j, -1] - sol_mom.y[j, -1]) / sol_mom.y[j, -1]
+    print(f"m{j}: PBE = {pbe_mom[j, -1]:.4e}   MoM = {sol_mom.y[j, -1]:.4e}   difference = {diff:.2f} %")
+print(f"c : PBE = {c_t[-1]:.4f}   MoM = {sol_mom.y[4, -1]:.4f} g/kg")
+print(f"mean size m1/m0: PBE = {pbe_mom[1, -1] / pbe_mom[0, -1]:.1f}   MoM = {sol_mom.y[1, -1] / sol_mom.y[0, -1]:.1f} μm")
+
+# plot both methods against time
+plt.figure(figsize=(7, 5))
+plt.subplot(1, 2, 1)
+plt.plot(t_out, c_t, label="PBE")
+plt.plot(t_out, sol_mom.y[4], "--", label="Method of moments")
+plt.xscale("log")
+plt.xlabel("Time [s]")
+plt.ylabel("Concentration [g/kg]")
+plt.legend()
+
+plt.subplot(1, 2, 2)
+plt.plot(t_out, pbe_mom[1] / pbe_mom[0], label="PBE")
+plt.plot(t_out, sol_mom.y[1] / sol_mom.y[0], "--", label="Method of moments")
+plt.xscale("log")
+plt.xlabel("Time [s]")
+plt.ylabel("Mean crystal length [μm]")
+plt.legend()
+
+plt.tight_layout()
+plt.savefig(here / "moments_check.png", dpi=200)
+print("saved moments_check.png")
